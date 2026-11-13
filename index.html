@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cardboard Globe Tilt Checker</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#f1e6d0;color:#3a2a18;margin:0;padding:12px;max-width:560px;margin:auto;box-sizing:border-box}
+h1{font-size:1.3rem;margin:.3em 0}
+#banner{padding:8px;border-radius:6px;font-weight:bold;margin:8px 0}
+#verdict{padding:10px;border-radius:6px;font-weight:bold;margin:8px 0}
+.pass{background:#bfe3b4}.fail{background:#f2a9a0}
+label{display:block;margin:10px 0 4px}
+input[type=number]{font-size:1.1rem;width:6em;padding:4px}
+input[type=range]{width:100%}
+canvas{width:100%;height:auto;background:#fbf6ea;border:2px solid #8a6a3c;border-radius:8px}
+.row{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.box{background:#fff8;padding:6px 10px;border-radius:6px;margin:4px 0}
+ul{padding-left:18px;font-size:.85rem}
+</style></head><body>
+<h1>Cardboard Globe Tilt Checker</h1>
+<div id="banner" role="status">Running self-test...</div>
+<label for="ang">Tilt angle (degrees, 0 to 90)</label>
+<input type="number" id="ang" value="23.5" step="0.1" min="0" max="90">
+<input type="range" id="rng" min="0" max="90" step="0.1" value="23.5" aria-label="Tilt angle slider">
+<div id="verdict" role="status"></div>
+<div class="box row"><span>Tilt: <b id="tilt"></b></span><span>Complement (wedge): <b id="comp"></b></span></div>
+<div class="box" id="match" role="status"></div>
+<canvas id="cv" width="560" height="400" aria-label="Cradle drawn at the tilt angle with protractor"></canvas>
+<p style="font-size:.85rem">Cut the cradle wedge so the axle leans from vertical by the tilt. The complement is the angle between the axle and the table. Zones: tilt under 23.5 is below the tropics line, 23.5 up to but not over 66.5 is mid, over 66.5 is polar.</p>
+<ul id="tests"></ul>
+<script>
+// ---- angle math ----
+function clampTilt(a){if(a===""||a===null)return NaN;a=Number(a);if(!isFinite(a))return NaN;return Math.min(90,Math.max(0,a));}
+function complement(a){return Math.round((90-a)*1e6)/1e6;}
+function fmt(a){return (Math.round(a*10)/10).toFixed(1)+"\u00b0";}
+function axleVector(tilt){const r=tilt*Math.PI/180;return {x:Math.sin(r),y:-Math.cos(r)};}
+function readoutFromVector(v){return Math.atan2(v.x,-v.y)*180/Math.PI;}
+function matches(input,read){return Math.abs(input-read)<0.05;}
+
+// ---- boundary rule: one pure function ----
+// "low" below 23.5, "mid" from 23.5 up to and including 66.5, "high" above 66.5
+function zoneOf(a){if(a<23.5)return "low";if(a<=66.5)return "mid";return "high";}
+// deliberately off-by-one copy, must fail the checks
+function zoneOfBroken(a){if(a<=23.5)return "low";if(a<66.5)return "mid";return "high";}
+const zoneCases=[[23.4,"low"],[23.5,"mid"],[66.5,"mid"],[66.6,"high"],[0,"low"],[90,"high"]];
+function zonePasses(fn){return zoneCases.every(c=>fn(c[0])===c[1]);}
+
+function selfTest(){
+ return [
+  ["23.5 complement is 66.5",complement(23.5)===66.5],
+  ["0 complement is 90",complement(0)===90],
+  ["90 complement is 0",complement(90)===0],
+  ["tilt + complement = 90 for 37.2",Math.abs(37.2+complement(37.2)-90)<1e-9],
+  ["clamp 120 gives 90",clampTilt(120)===90],
+  ["clamp -5 gives 0",clampTilt(-5)===0],
+  ["clamp 'abc' is NaN",isNaN(clampTilt("abc"))],
+  ["clamp empty is NaN",isNaN(clampTilt(""))],
+  ["readout of 23.5 vector is 23.5",matches(23.5,readoutFromVector(axleVector(23.5)))],
+  ["readout 30 does NOT match input 25 (fails on purpose)",!matches(25,30)],
+  ["23.4 is low",zoneOf(23.4)==="low"],
+  ["23.5 is mid (boundary)",zoneOf(23.5)==="mid"],
+  ["66.5 is mid (boundary)",zoneOf(66.5)==="mid"],
+  ["66.6 is high",zoneOf(66.6)==="high"],
+  ["real zone rule passes all cases",zonePasses(zoneOf)],
+  ["broken zone copy fails at least one case",!zonePasses(zoneOfBroken)]
+ ];
+}
+let allOk=false;
+try{
+ const res=selfTest();allOk=res.every(r=>r[1]);
+ document.getElementById("tests").innerHTML=res.map(r=>"<li>"+(r[1]?"pass":"FAIL")+": "+r[0]+"</li>").join("");
+}catch(e){document.getElementById("tests").textContent="Test crashed: "+e.message;}
+const b=document.getElementById("banner");
+b.textContent=allOk?"All self-tests pass":"Self-test FAILED, don't trust the numbers";
+b.className=allOk?"pass":"fail";
+
+// ---- cradle check for the entered angle ----
+const zoneText={low:"below 23.5 (low zone)",mid:"between 23.5 and 66.5 (mid zone)",high:"above 66.5 (high zone)"};
+function cradleVerdict(t){
+ // Earth's tilt is 23.5: it must read as the mid zone, boundary included
+ const z=zoneOf(t);
+ const isEarth=Math.abs(t-23.5)<0.05;
+ return {zone:z,earth:isEarth};
+}
+
+// ---- drawing ----
+const cv=document.getElementById("cv"),c=cv.getContext("2d");
+function draw(t){
+ c.clearRect(0,0,560,400);
+ const cx=280,cy=300,L=220;
+ c.fillStyle="#b88a4e";c.fillRect(40,300,480,14);
+ c.fillStyle="#d9b27a";c.strokeStyle="#6b4a22";c.lineWidth=2;
+ c.fillRect(cx-60,276,120,24);c.strokeRect(cx-60,276,120,24);
+ c.setLineDash([6,5]);c.strokeStyle="#777";c.beginPath();c.moveTo(cx,cy-L-20);c.lineTo(cx,cy+0);c.stroke();c.setLineDash([]);
+ const gy=170,R=85;
+ c.fillStyle="#9fd0e8";c.strokeStyle="#2f5f78";c.beginPath();c.arc(cx,gy,R,0,7);c.fill();c.stroke();
+ const v=axleVector(t);
+ c.strokeStyle="#c0392b";c.lineWidth=4;c.beginPath();
+ c.moveTo(cx-v.x*(R+45),gy-v.y*(R+45));c.lineTo(cx+v.x*(R+45),gy+v.y*(R+45));c.stroke();
+ c.strokeStyle="#2f5f78";c.lineWidth=2;c.beginPath();
+ c.ellipse(cx,gy,R,R*0.25,t*Math.PI/180,0,7);c.stroke();
+ const px=cx,py=gy,pr=R+70;
+ c.strokeStyle="#3a2a18";c.lineWidth=1;
+ for(let d=-45;d<=45;d+=5){const r=d*Math.PI/180,len=d%15===0?12:6;
+  c.beginPath();c.moveTo(px+Math.sin(r)*pr,py-Math.cos(r)*pr);c.lineTo(px+Math.sin(r)*(pr-len),py-Math.cos(r)*(pr-len));c.stroke();}
+ c.beginPath();c.arc(px,py,pr,-Math.PI/2-0.785,-Math.PI/2+0.785);c.stroke();
+ const shown=Math.min(45,t),sr=shown*Math.PI/180;
+ c.fillStyle="#c0392b";c.beginPath();c.arc(px+Math.sin(sr)*pr,py-Math.cos(sr)*pr,5,0,7);c.fill();
+ c.fillStyle="#3a2a18";c.font="16px system-ui";
+ c.fillText("readout "+fmt(readoutFromVector(v)),20,30);
+ if(t>45)c.fillText("(protractor shows 0-45 only)",20,52);
+}
+function update(val){
+ const t=clampTilt(val);
+ const m=document.getElementById("match"),vd=document.getElementById("verdict");
+ if(isNaN(t)){m.textContent="Enter a number.";m.className="box fail";vd.textContent="FAIL: no valid angle";vd.className="fail";return;}
+ const read=readoutFromVector(axleVector(t));
+ document.getElementById("tilt").textContent=fmt(t);
+ document.getElementById("comp").textContent=fmt(complement(t));
+ const ok=matches(t,read);
+ m.textContent=(ok?"Match: ":"MISMATCH: ")+"input "+fmt(t)+", drawn readout "+fmt(read);
+ m.className="box "+(ok?"pass":"fail");
+ const cv2=cradleVerdict(t);
+ const good=allOk&&ok&&cv2.zone==="mid";
+ vd.textContent=(good?"PASS: ":"FAIL: ")+fmt(t)+" is "+zoneText[cv2.zone]+(cv2.earth?", Earth's tilt":"")+(allOk?"":" (self-tests failing)");
+ vd.className=good?"pass":"fail";
+ draw(t);
+}
+const ang=document.getElementById("ang"),rng=document.getElementById("rng");
+ang.addEventListener("input",()=>{update(ang.value);const t=clampTilt(ang.value);if(!isNaN(t))rng.value=t;});
+rng.addEventListener("input",()=>{ang.value=rng.value;update(rng.value);});
+update(23.5);
+</script></body></html>
